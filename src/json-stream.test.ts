@@ -66,6 +66,14 @@ describe('tranform', () => {
         expect(result).toEqual(tranformed)
     })
 
+    it('entries', async () => {
+        const tranformed = 'my tranformed entry'
+        const query: Query = { [entries]: () => tranformed }
+        const result = await parse(new StreamMock(json), query)
+
+        expect(result).toEqual({})
+    })
+
     it('specific entry [func]', async () => {
         const tranformed = 'my tranformed a'
         const query: Query = { a: () => tranformed }
