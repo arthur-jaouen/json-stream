@@ -1,0 +1,33 @@
+{
+    "extends": "@tsconfig/node16/tsconfig.json",
+    "include": ["src/**/*", "@types/jest/jest.d.ts"],
+    "exclude": ["src/**/*.test.ts"],
+    "compilerOptions": {
+        "lib": ["esnext", "dom"],
+
+        "rootDir": "./src",
+        "outDir": "./dist",
+        "module": "esnext",
+        "moduleResolution": "node",
+
+        "declaration": true,
+        "sourceMap": true,
+        "importHelpers": true,
+
+        "alwaysStrict": true,
+        "noImplicitAny": true,
+        "noImplicitReturns": true,
+        "noImplicitThis": true,
+        "strict": true,
+        "strictNullChecks": true,
+        "strictFunctionTypes": true,
+        "strictBindCallApply": true,
+        "strictPropertyInitialization": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noFallthroughCasesInSwitch": true,
+
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true
+    }
+}
