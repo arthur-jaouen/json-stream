@@ -1,15 +1,20 @@
-export const transform: unique symbol = Symbol()
 export const entries: unique symbol = Symbol()
+export const transform: unique symbol = Symbol()
+export const filter: unique symbol = Symbol()
 
 export type Query = {
-    [key: string]: null | Transformer | Query
+    [key: string]: QueryMember
 
+    [entries]?: QueryMember
     [transform]?: Transformer
-
-    [entries]?: null | Transformer | Query
+    [filter]?: Filter
 }
 
+export type QueryMember = null | Transformer | Query
+
 export type Transformer = (value: any) => any
+
+export type Filter = (value: any) => boolean
 
 export interface StreamReader<T> {
     read(): Promise<{ done: boolean; value?: T }>
@@ -74,7 +79,9 @@ function start(done: (value: any) => void, query: Query): Parser {
     }
 
     function objDone(value: any): Parser {
-        done(hasProp(query, transform) ? query[transform]!(value) : value)
+        const t = query[transform]
+
+        done(t ? t(value) : value)
 
         return objEnd
     }
@@ -108,8 +115,22 @@ function kw(done: (value: any) => Parser, s: string, value: any): Parser {
     return nextChar
 }
 
-function hasProp(obj: Object, prop: PropertyKey): boolean {
-    return obj.hasOwnProperty(prop)
+function getQuery(query: Query, key: string | number): undefined | QueryMember {
+    return query.hasOwnProperty(key) ? query[key] : query[entries]
+}
+
+function doTranform(query: undefined | QueryMember, value: any): any {
+    return !query
+        ? value
+        : typeof query === 'function'
+        ? query(value)
+        : query[transform]
+        ? query[transform]!(value)
+        : value
+}
+
+function doFilter(query: undefined | QueryMember, value: any): boolean {
+    return !query || typeof query === 'function' || !query[filter] || query[filter]!(value)
 }
 
 // object
@@ -117,7 +138,8 @@ function hasProp(obj: Object, prop: PropertyKey): boolean {
 function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     const obj: JsonObject = {}
 
-    let key: string = ''
+    let key: string = '',
+        q: QueryMember | undefined
 
     function keyStart(c: number): Parser {
         return (
@@ -135,30 +157,24 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     }
 
     function valueStart(c: number): Parser {
-        const q = hasProp(query, key) ? query[key] : query[entries]
+        q = getQuery(query, key)
 
         return (
             (ws(c) && valueStart) ||
             (c === 0x3a /* : */ &&
                 (q === null
                     ? skip(entryDone)
-                    : value(valueDone, q === undefined || typeof q === 'function' ? {} : q))) ||
+                    : value(valueDone, !q || typeof q === 'function' ? {} : q))) ||
             error()
         )
     }
 
     function valueDone(value: any): Parser {
-        const q = hasProp(query, key) ? query[key] : query[entries]
-        const transformed =
-            q !== undefined && q !== null
-                ? typeof q === 'function'
-                    ? q(value)
-                    : hasProp(q, transform)
-                    ? q[transform]!(value)
-                    : value
-                : value
+        value = doTranform(q, value)
 
-        obj[key] = transformed
+        if (doFilter(q, value)) {
+            obj[key] = value
+        }
 
         return entryDone
     }
@@ -180,32 +196,27 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
 function arr(done: (arr: any[]) => Parser, query: Query): Parser {
     const arr: any[] = []
 
-    let i = 0
+    let i = 0,
+        q: QueryMember | undefined
 
     function valueStart(c: number): Parser {
-        const q = hasProp(query, i) ? query[i] : query[entries]
+        q = getQuery(query, i)
 
         return (
             (ws(c) && valueStart) ||
             (c === 0x5d /* ] */ && done(arr)) ||
             (q === null
                 ? skip(entryDone)(c)
-                : value(valueDone, q === undefined || typeof q === 'function' ? {} : q)(c))
+                : value(valueDone, !q || typeof q === 'function' ? {} : q)(c))
         )
     }
 
     function valueDone(value: any): Parser {
-        const q = query[i] || query[entries]
-        const transformed =
-            q !== undefined && q !== null
-                ? typeof q === 'function'
-                    ? q(value)
-                    : hasProp(q, transform)
-                    ? q[transform]!(value)
-                    : value
-                : value
+        value = doTranform(q, value)
 
-        arr.push(transformed)
+        if (doFilter(q, value)) {
+            arr.push(value)
+        }
 
         return entryDone
     }
