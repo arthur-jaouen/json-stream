@@ -74,7 +74,7 @@ function start(done: (value: any) => void, query: Query): Parser {
     }
 
     function objDone(value: any): Parser {
-        done(query.hasOwnProperty(transform) ? query[transform]!(value) : value)
+        done(hasProp(query, transform) ? query[transform]!(value) : value)
 
         return objEnd
     }
@@ -108,6 +108,10 @@ function kw(done: (value: any) => Parser, s: string, value: any): Parser {
     return nextChar
 }
 
+function hasProp(obj: Object, prop: PropertyKey): boolean {
+    return obj.hasOwnProperty(prop)
+}
+
 // object
 
 function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
@@ -131,7 +135,7 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     }
 
     function valueStart(c: number): Parser {
-        const q = query.hasOwnProperty(key) ? query[key] : query[entries]
+        const q = hasProp(query, key) ? query[key] : query[entries]
 
         return (
             (ws(c) && valueStart) ||
@@ -144,12 +148,12 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     }
 
     function valueDone(value: any): Parser {
-        const q = query.hasOwnProperty(key) ? query[key] : query[entries]
+        const q = hasProp(query, key) ? query[key] : query[entries]
         const transformed =
             q !== undefined && q !== null
                 ? typeof q === 'function'
                     ? q(value)
-                    : q.hasOwnProperty(transform)
+                    : hasProp(q, transform)
                     ? q[transform]!(value)
                     : value
                 : value
@@ -179,7 +183,7 @@ function arr(done: (arr: any[]) => Parser, query: Query): Parser {
     let i = 0
 
     function valueStart(c: number): Parser {
-        const q = query.hasOwnProperty(i) ? query[i] : query[entries]
+        const q = hasProp(query, i) ? query[i] : query[entries]
 
         return (
             (ws(c) && valueStart) ||
@@ -196,7 +200,7 @@ function arr(done: (arr: any[]) => Parser, query: Query): Parser {
             q !== undefined && q !== null
                 ? typeof q === 'function'
                     ? q(value)
-                    : q.hasOwnProperty(transform)
+                    : hasProp(q, transform)
                     ? q[transform]!(value)
                     : value
                 : value

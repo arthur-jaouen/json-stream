@@ -1,6 +1,6 @@
 {
     "name": "@ja-ja/json-stream-sample-cats",
-    "version": "0.0.2",
+    "version": "0.0.1",
     "description": "",
     "author": "Arthur Jaouen",
     "license": "MIT",
@@ -10,7 +10,6 @@
         "start": "node index.mjs"
     },
     "dependencies": {
-        "@ja-ja/json-stream": "^0.0.1",
-        "node-fetch": "^3.0.0"
+        "@ja-ja/json-stream": "latest"
     }
 }
