@@ -1,6 +1,6 @@
 {
     "name": "@ja-ja/json-stream",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "",
     "author": "Arthur Jaouen",
     "license": "MIT",
@@ -61,8 +61,8 @@
         "prettier": "^2.4.1",
         "ts-jest": "^27.0.5",
         "tslib": "^2.3.1",
-        "typescript": "^4.4.3",
         "typedoc": "^0.22.4",
+        "typescript": "^4.4.3",
         "webpack": "^5.52.1",
         "webpack-cli": "^4.8.0"
     }
