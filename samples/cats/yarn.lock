@@ -2,6 +2,11 @@
 # yarn lockfile v1
 
 
+"@ja-ja/json-stream@^0.0.1":
+  version "0.0.1"
+  resolved "https://registry.yarnpkg.com/@ja-ja/json-stream/-/json-stream-0.0.1.tgz#5943c8bb176cd78ec69dd49f92759b29c0bba9b0"
+  integrity sha512-BmKbfO8m3ogmCeaASwnlu6qGWeEWNOQMU0mbF4+rkSP854ahyuBzi2mDhmgY0gefRGFI3JLwkzKmEuXKtA9ADg==
+
 data-uri-to-buffer@^3.0.1:
   version "3.0.1"
   resolved "https://registry.yarnpkg.com/data-uri-to-buffer/-/data-uri-to-buffer-3.0.1.tgz#594b8973938c5bc2c33046535785341abc4f3636"

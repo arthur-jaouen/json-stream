@@ -20,7 +20,7 @@
         "dev-ts": "tsc --watch",
         "dev-bundle": "webpack --watch --mode development",
         "dev": "concurrently 'yarn:dev-ts' 'yarn:dev-bundle'",
-        "doc": "typedoc src/json-stream.ts --out dist/docs",
+        "doc": "typedoc src/json-stream.ts",
         "test": "jest",
         "coverage": "jest --coverage",
         "prepack": "yarn run test && yarn run build && yarn run doc"
