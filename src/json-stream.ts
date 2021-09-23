@@ -225,7 +225,20 @@ function str(done: (str: string) => Parser): Parser {
         return (
             (c === 0x22 /* " */ && done(String.fromCharCode(...str))) ||
             (c === 0x5c /* \ */ && slash) ||
-            (c >= 0x20 /* ' ' - <end> */ && charDone(c)) ||
+            (c >= 0x20 /* ' ' */ && c <= 0x7f /* DEL */ && charDone(c)) ||
+            (c >= 0xc0 && c <= 0xdf && ((unicode = c - 0xc0), (counter = 0), utf)) ||
+            (c >= 0xe0 && c <= 0xef && ((unicode = c - 0xe0), (counter = 1), utf)) ||
+            (c >= 0xf0 && c <= 0xf7 && ((unicode = c - 0xf0), (counter = 2), utf)) ||
+            error()
+        )
+    }
+
+    function utf(c: number): Parser {
+        return (
+            (c >= 0x80 &&
+                c <= 0xbf &&
+                ((unicode = (unicode << 6) + c - 0x80),
+                counter == 0 ? charDone(unicode) : (counter--, utf))) ||
             error()
         )
     }

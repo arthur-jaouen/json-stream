@@ -16,7 +16,7 @@ class StreamMock implements StreamReader<Uint8Array> {
 const json = [
     '{"a":"b',
     '","c":"d \\n \\t \\r \\f \\',
-    'b \\\\ \\" \\u1234"',
+    'b \\\\ \\" \\u1234 ሴ"',
     ', "e": 1, "f": -1, "g":-0, "h":0, "i":-23e-5, "j": 3.14',
     ', "k": true, "l":false, "m": null, ',
     '"n": [], "o": {}, "p": [1, {}, "gdf"], "q": {"a": [1,"a",{}]}}',
