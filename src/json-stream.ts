@@ -1,16 +1,18 @@
 export const entries: unique symbol = Symbol()
+export const skip: unique symbol = Symbol()
 export const transform: unique symbol = Symbol()
 export const filter: unique symbol = Symbol()
 
 export type Query = {
-    [key: string]: QueryMember
+    [key: string]: Query
 
-    [entries]?: QueryMember
+    [entries]?: Query
+    [skip]?: Skip
     [transform]?: Transformer
     [filter]?: Filter
 }
 
-export type QueryMember = null | Transformer | Query
+export type Skip = (key: string | number) => boolean
 
 export type Transformer = (value: any) => any
 
@@ -97,36 +99,17 @@ function ws(c: number): boolean {
     return c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d
 }
 
-function kw(done: (value: any) => Parser, s: string, value: any): Parser {
+function kw(done: (value: any) => Parser, s: number[], value: any): Parser {
     let counter = 0
 
     function nextChar(c: number): Parser {
         return (
-            (c === s.charCodeAt(counter) &&
-                (counter < s.length - 1 ? (counter++, nextChar) : done(value))) ||
+            (c === s[counter] && (counter < s.length - 1 ? (counter++, nextChar) : done(value))) ||
             error()
         )
     }
 
     return nextChar
-}
-
-function getQuery(query: Query, key: string | number): undefined | QueryMember {
-    return query.hasOwnProperty(key) ? query[key] : query[entries]
-}
-
-function doTranform(query: undefined | QueryMember, value: any): any {
-    return !query
-        ? value
-        : typeof query === 'function'
-        ? query(value)
-        : query[transform]
-        ? query[transform]!(value)
-        : value
-}
-
-function doFilter(query: undefined | QueryMember, value: any): boolean {
-    return !query || typeof query === 'function' || !query[filter] || query[filter]!(value)
 }
 
 // object
@@ -135,7 +118,7 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     const obj: JsonObject = {}
 
     let key: string = '',
-        q: QueryMember | undefined
+        q: Query
 
     function keyStart(c: number): Parser {
         return (
@@ -153,22 +136,22 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     }
 
     function valueStart(c: number): Parser {
-        q = getQuery(query, key)
+        q = query[key] || query[entries] || {}
 
         return (
             (ws(c) && valueStart) ||
             (c === 0x3a /* : */ &&
-                (q === null
-                    ? skip(entryDone)
-                    : value(valueDone, !q || typeof q === 'function' ? {} : q))) ||
+                (q[skip] && q[skip]!(key) ? valueSkip(entryDone) : value(valueDone, q))) ||
             error()
         )
     }
 
     function valueDone(value: any): Parser {
-        value = doTranform(q, value)
+        if (q[transform]) {
+            value = q[transform]!(value)
+        }
 
-        if (doFilter(q, value)) {
+        if (!q[filter] || q[filter]!(value)) {
             obj[key] = value
         }
 
@@ -193,24 +176,24 @@ function arr(done: (arr: any[]) => Parser, query: Query): Parser {
     const arr: any[] = []
 
     let i = 0,
-        q: QueryMember | undefined
+        q: Query
 
     function valueStart(c: number): Parser {
-        q = getQuery(query, i)
+        q = query[i] || query[entries] || {}
 
         return (
             (ws(c) && valueStart) ||
             (c === 0x5d /* ] */ && done(arr)) ||
-            (q === null
-                ? skip(entryDone)(c)
-                : value(valueDone, !q || typeof q === 'function' ? {} : q)(c))
+            (q[skip] && q[skip]!(i) ? valueSkip(entryDone)(c) : value(valueDone, q)(c))
         )
     }
 
     function valueDone(value: any): Parser {
-        value = doTranform(q, value)
+        if (q[transform]) {
+            value = q[transform]!(value)
+        }
 
-        if (doFilter(q, value)) {
+        if (!q[filter] || q[filter]!(value)) {
             arr.push(value)
         }
 
@@ -234,13 +217,13 @@ function arr(done: (arr: any[]) => Parser, query: Query): Parser {
 // string
 
 function str(done: (str: string) => Parser): Parser {
-    let str: string = ''
+    let str: number[] = []
     let unicode: number = 0
     let counter: number = 0
 
     function charStart(c: number): Parser {
         return (
-            (c === 0x22 /* " */ && done(str)) ||
+            (c === 0x22 /* " */ && done(String.fromCharCode(...str))) ||
             (c === 0x5c /* \ */ && slash) ||
             (c >= 0x20 /* ' ' - <end> */ && charDone(c)) ||
             error()
@@ -248,7 +231,7 @@ function str(done: (str: string) => Parser): Parser {
     }
 
     function charDone(c: number): Parser {
-        str += String.fromCharCode(c)
+        str.push(c)
 
         return charStart
     }
@@ -379,15 +362,16 @@ function value(done: (value: any) => Parser, query: Query): Parser {
         (c === 0x22 /* " */ && str(done)) ||
         (c === 0x7b /* { */ && obj(done, query)) ||
         (c === 0x5b /* [ */ && arr(done, query)) ||
-        (c === 0x74 /* t */ && kw(done, 'rue', true)) ||
-        (c === 0x66 /* f */ && kw(done, 'alse', false)) ||
-        (c === 0x6e /* n */ && kw(done, 'ull', null)) ||
+        (c === 0x74 /* t */ && kw(done, [0x72 /* r */, 0x75 /* u */, 0x65 /* e */], true)) ||
+        (c === 0x66 /* f */ &&
+            kw(done, [0x61 /* a */, 0x6c /* l */, 0x73 /* s */, 0x65 /* e */], false)) ||
+        (c === 0x6e /* n */ && kw(done, [0x75 /* u */, 0x6c /* l */, 0x6c /* l */], null)) ||
         num(done, c)
 }
 
 // skip
 
-function skip(next: Parser): Parser {
+function valueSkip(next: Parser): Parser {
     let level = 0
 
     function skipStart(c: number): Parser {

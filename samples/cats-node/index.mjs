@@ -10,15 +10,15 @@ async function getCats() {
             const { bytesRead } = await response.read({ buffer })
 
             if (bytesRead === 0) {
-                await response.close()
-
                 return { done: true }
             }
 
             return { done: false, value: buffer.subarray(0, bytesRead) }
         },
 
-        releaseLock() {},
+        releaseLock() {
+            response.close()
+        },
     }
 
     return parse(reader, { [entries]: { tags: null } })

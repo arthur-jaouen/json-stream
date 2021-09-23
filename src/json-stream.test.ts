@@ -1,4 +1,4 @@
-import { parse, filter, StreamReader, entries, Query, transform } from './json-stream'
+import { parse, filter, StreamReader, entries, Query, transform, skip } from './json-stream'
 
 class StreamMock implements StreamReader<Uint8Array> {
     constructor(public buffers: string[], public i = 0) {}
@@ -32,14 +32,14 @@ it('parse', async () => {
 
 describe('skip', () => {
     it('entries', async () => {
-        const query: Query = { [entries]: null }
+        const query: Query = { [entries]: { [skip]: () => true } }
         const result = await parse(new StreamMock(json), query)
 
         expect(result).toEqual({})
     })
 
     it('nested entries', async () => {
-        const query: Query = { [entries]: { [entries]: null } }
+        const query: Query = { [entries]: { [entries]: { [skip]: () => true } } }
         const result = await parse(new StreamMock(json), query)
 
         const expected = { ...parsed, p: [], q: {} }
@@ -48,7 +48,7 @@ describe('skip', () => {
     })
 
     it('specific entry', async () => {
-        const query: Query = { a: null }
+        const query: Query = { a: { [skip]: () => true } }
         const result = await parse(new StreamMock(json), query)
 
         const { a: _, ...expected } = parsed
@@ -68,7 +68,7 @@ describe('tranform', () => {
 
     it('entries', async () => {
         const tranformed = 'my tranformed entry'
-        const query: Query = { [entries]: () => tranformed }
+        const query: Query = { [entries]: { [transform]: () => tranformed } }
         const result = await parse(new StreamMock(json), query)
 
         const expected: any = {}
@@ -81,7 +81,7 @@ describe('tranform', () => {
 
     it('specific entry [func]', async () => {
         const tranformed = 'my tranformed a'
-        const query: Query = { a: () => tranformed }
+        const query: Query = { a: { [transform]: () => tranformed } }
         const result = await parse(new StreamMock(json), query)
 
         const expected = { ...parsed, a: tranformed }
