@@ -1,17 +1,19 @@
 import path from 'path'
+import HtmlWebpackPlugin from 'html-webpack-plugin'
 
 const config = {
     target: 'web',
     entry: {
-        'json-stream': './dist/json-stream.js',
+        index: './index',
     },
     output: {
         path: path.resolve('./dist'),
-        filename: '[name].min.js',
-        library: { name: '@ja-ja/json-stream', type: 'umd', umdNamedDefine: true },
+        publicPath: '',
+        filename: '[name].[contenthash].js',
+        chunkFilename: '[name].[contenthash].js',
     },
     resolve: {
-        extensions: ['.js'],
+        extensions: ['.js', '.mjs'],
     },
     module: {
         rules: [
@@ -30,6 +32,12 @@ const config = {
             },
         ],
     },
+    plugins: [
+        new HtmlWebpackPlugin({
+            output: 'index.html',
+            template: 'index.html',
+        }),
+    ],
     stats: {
         children: false,
         modules: false,
@@ -39,13 +47,6 @@ const config = {
 export default (_env, argv) => {
     const mode = argv.mode
     const devtool = mode === 'development' ? 'cheap-module-source-map' : 'source-map'
-    const performance =
-        mode === 'development'
-            ? undefined
-            : {
-                  maxEntrypointSize: 8 * 1024,
-                  maxAssetSize: 8 * 1024,
-              }
 
-    return { ...config, mode, devtool, performance }
+    return { ...config, mode, devtool }
 }

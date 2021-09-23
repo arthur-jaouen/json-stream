@@ -21,7 +21,7 @@ async function getCats() {
         releaseLock() {},
     }
 
-    return await parse(reader, { cats: { [entries]: { tags: null } } })
+    return parse(reader, { [entries]: { tags: null } })
 }
 
 getCats().then(console.log)

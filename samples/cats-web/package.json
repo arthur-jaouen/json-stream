@@ -1,0 +1,36 @@
+{
+    "name": "@ja-ja/json-stream-sample-cats-web",
+    "version": "0.0.1",
+    "description": "",
+    "author": "Arthur Jaouen",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "build": "rm -rf dist/* && webpack --mode production",
+        "start": "webpack serve --mode development --open --hot"
+    },
+    "browserslist": [
+        "defaults"
+    ],
+    "prettier": {
+        "trailingComma": "es5",
+        "tabWidth": 4,
+        "semi": false,
+        "singleQuote": true,
+        "printWidth": 100
+    },
+    "devDependencies": {
+        "@babel/core": "^7.15.5",
+        "@babel/preset-env": "^7.15.6",
+        "@ja-ja/json-stream": "latest",
+        "autoprefixer": "^10.3.5",
+        "babel-loader": "^8.2.2",
+        "browserslist": "^4.17.1",
+        "core-js": "^3.18.0",
+        "html-webpack-plugin": "^5.3.2",
+        "prettier": "^2.4.1",
+        "webpack": "^5.52.1",
+        "webpack-cli": "^4.8.0",
+        "webpack-dev-server": "^4.2.1"
+    }
+}

@@ -74,11 +74,7 @@ type Parser = (c: number) => Parser
 type JsonObject = Record<string, any>
 
 function start(done: (value: any) => void, query: Query): Parser {
-    function objStart(c: number): Parser {
-        return (ws(c) && objStart) || (c === 0x7b /* { */ && obj(objDone, query)) || error()
-    }
-
-    function objDone(value: any): Parser {
+    function valueDone(value: any): Parser {
         const t = query[transform]
 
         done(t ? t(value) : value)
@@ -90,7 +86,7 @@ function start(done: (value: any) => void, query: Query): Parser {
         return (ws(c) && objEnd) || error()
     }
 
-    return objStart
+    return value(valueDone, query)
 }
 
 function error(): Parser {
