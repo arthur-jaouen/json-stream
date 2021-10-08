@@ -22,8 +22,7 @@
     "devDependencies": {
         "@babel/core": "^7.15.5",
         "@babel/preset-env": "^7.15.6",
-        "@ja-ja/json-stream": "^0.0.6",
-        "autoprefixer": "^10.3.7",
+        "@ja-ja/json-stream": "latest",
         "babel-loader": "^8.2.2",
         "browserslist": "^4.17.3",
         "core-js": "^3.18.2",

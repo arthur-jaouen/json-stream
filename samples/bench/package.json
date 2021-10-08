@@ -17,6 +17,6 @@
         "printWidth": 100
     },
     "dependencies": {
-        "@ja-ja/json-stream": "^0.0.6"
+        "@ja-ja/json-stream": "latest"
     }
 }
