@@ -5,9 +5,9 @@
     "author": "Arthur Jaouen",
     "license": "MIT",
     "type": "module",
-    "main": "index.mjs",
+    "main": "src/index.mjs",
     "scripts": {
-        "start": "node index.mjs"
+        "start": "node src/index.mjs"
     },
     "prettier": {
         "trailingComma": "es5",
@@ -17,6 +17,6 @@
         "printWidth": 100
     },
     "dependencies": {
-        "@ja-ja/json-stream": "latest"
+        "@ja-ja/json-stream": "^0.0.6"
     }
 }

@@ -1,5 +1,7 @@
 # @ja-ja/json-stream
 
+Lightweight JSON stream parsing library, less than 5KB ungzipped
+
 ## Installation
 
 ### NPM

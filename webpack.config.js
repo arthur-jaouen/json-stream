@@ -47,5 +47,24 @@ export default (_env, argv) => {
                   maxAssetSize: 8 * 1024,
               }
 
-    return { ...config, mode, devtool, performance }
+    const base = {
+        ...config,
+        mode,
+        devtool,
+        performance,
+    }
+
+    const modules = {
+        ...base,
+        experiments: {
+            outputModule: true,
+        },
+        output: {
+            ...base.output,
+            filename: '[name].min.mjs',
+            library: { type: 'module' },
+        },
+    }
+
+    return [base, modules]
 }

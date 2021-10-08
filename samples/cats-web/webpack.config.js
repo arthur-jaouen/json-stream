@@ -4,7 +4,7 @@ import HtmlWebpackPlugin from 'html-webpack-plugin'
 const config = {
     target: 'web',
     entry: {
-        index: './index',
+        index: './src/index',
     },
     output: {
         path: path.resolve('./dist'),
@@ -35,7 +35,7 @@ const config = {
     plugins: [
         new HtmlWebpackPlugin({
             output: 'index.html',
-            template: 'index.html',
+            template: 'src/index.html',
         }),
     ],
     stats: {
