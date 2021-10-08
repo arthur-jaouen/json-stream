@@ -13,9 +13,7 @@ export type Query = {
 }
 
 export type Skip = (key: string | number) => boolean
-
 export type Transformer = (value: any) => any
-
 export type Filter = (value: any) => boolean
 
 export interface StreamReader<T> {
@@ -24,71 +22,66 @@ export interface StreamReader<T> {
     releaseLock(): void
 }
 
-export function parse<T = any>(stream: StreamReader<Uint8Array>, query: Query): Promise<T> {
-    return new Promise((resolve, reject) => {
-        let value: any = null
-        let next = start((v) => (value = v), query)
+export function parse<T = any>(reader: StreamReader<Uint8Array>, query: Query): Promise<T> {
+    function doParse(resolve: (result: T) => void, reject: (error: Error) => void) {
+        let result: any = null
 
-        function parseStream(): Promise<undefined> {
-            return stream.read().then((res) => {
-                if (res.done) {
-                    if (value === null) {
-                        reject(new Error('Reached early end of stream'))
-                    } else {
-                        resolve(value)
-                    }
+        function valueDone(v: T): Parser {
+            result = query[transform] ? query[transform]!(v) : v
 
-                    return
-                }
-
-                if (res.value === undefined) {
-                    return
-                }
-
-                const buffer = res.value
-                let i = 0
-
-                try {
-                    while (i < buffer.length) {
-                        next = next(buffer[i])
-                        i++
-                    }
-                } catch (e) {
-                    console.error(e)
-
-                    const char = String.fromCharCode(buffer[i])
-                    const json = new TextDecoder().decode(buffer)
-
-                    reject(new Error(`Char ${i} '${char}':\n${json}`))
-                }
-
-                return parseStream()
-            })
+            return end
         }
 
-        parseStream().finally(() => {
-            stream.releaseLock()
-        })
-    })
+        let next = value(valueDone, query)
+
+        function parseStream(res: { done: boolean; value?: Uint8Array }): void {
+            if (res.done || res.value === undefined) {
+                reader.releaseLock()
+
+                next(0)
+
+                if (result === null) {
+                    reject(new Error('Reached EOF'))
+                } else {
+                    resolve(result)
+                }
+
+                return
+            }
+
+            const buffer = res.value
+            let i = 0
+
+            try {
+                while (i < buffer.length) {
+                    next = next(buffer[i])
+                    i++
+                }
+            } catch (e) {
+                reader.releaseLock()
+
+                const char = String.fromCharCode(buffer[i])
+                const json = new TextDecoder().decode(buffer)
+
+                reject(new Error(`Char ${i} '${char}':\n${json}`))
+
+                return
+            }
+
+            reader.read().then(parseStream)
+        }
+
+        reader.read().then(parseStream)
+    }
+
+    return new Promise(doParse)
 }
 
 type Parser = (c: number) => Parser
 type JsonObject = Record<string, any>
 
-function start(done: (value: any) => void, query: Query): Parser {
-    function valueDone(value: any): Parser {
-        const t = query[transform]
-
-        done(t ? t(value) : value)
-
-        return objEnd
-    }
-
-    function objEnd(c: number): Parser {
-        return (ws(c) && objEnd) || error()
-    }
-
-    return value(valueDone, query)
+function end(c: number): Parser {
+    return ((ws(c) || c === 0) && end) || error()
 }
 
 function error(): Parser {
@@ -103,10 +96,7 @@ function kw(done: (value: any) => Parser, s: number[], value: any): Parser {
     let counter = 0
 
     function nextChar(c: number): Parser {
-        return (
-            (c === s[counter] && (counter < s.length - 1 ? (counter++, nextChar) : done(value))) ||
-            error()
-        )
+        return (c === s[counter++] && (counter < s.length ? nextChar : done(value))) || error()
     }
 
     return nextChar
@@ -122,9 +112,9 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
 
     function keyStart(c: number): Parser {
         return (
-            (ws(c) && keyStart) ||
             (c === 0x22 /* " */ && str(keyDone)) ||
             (c === 0x7d /* } */ && done(obj)) ||
+            (ws(c) && keyStart) ||
             error()
         )
     }
@@ -136,12 +126,11 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
     }
 
     function valueStart(c: number): Parser {
-        q = query[key] || query[entries] || {}
-
         return (
-            (ws(c) && valueStart) ||
             (c === 0x3a /* : */ &&
-                (q[skip] && q[skip]!(key) ? valueSkip(entryDone) : value(valueDone, q))) ||
+                ((q = query[key] || query[entries] || {}),
+                q[skip] && q[skip]!(key) ? valueSkip(entryDone) : value(valueDone, q))) ||
+            (ws(c) && valueStart) ||
             error()
         )
     }
@@ -160,9 +149,9 @@ function obj(done: (obj: JsonObject) => Parser, query: Query): Parser {
 
     function entryDone(c: number): Parser {
         return (
-            (ws(c) && entryDone) ||
             (c === 0x2c /* , */ && keyStart) ||
             (c === 0x7d /* } */ && done(obj)) ||
+            (ws(c) && entryDone) ||
             error()
         )
     }
@@ -179,12 +168,11 @@ function arr(done: (arr: any[]) => Parser, query: Query): Parser {
         q: Query
 
     function valueStart(c: number): Parser {
-        q = query[i] || query[entries] || {}
-
         return (
-            (ws(c) && valueStart) ||
             (c === 0x5d /* ] */ && done(arr)) ||
-            (q[skip] && q[skip]!(i) ? valueSkip(entryDone)(c) : value(valueDone, q)(c))
+            (ws(c) && valueStart) ||
+            ((q = query[i] || query[entries] || {}),
+            q[skip] && q[skip]!(i) ? valueSkip(entryDone)(c) : value(valueDone, q)(c))
         )
     }
 
@@ -204,9 +192,9 @@ function arr(done: (arr: any[]) => Parser, query: Query): Parser {
         i++
 
         return (
-            (ws(c) && entryDone) ||
             (c === 0x2c /* , */ && valueStart) ||
             (c === 0x5d /* ] */ && done(arr)) ||
+            (ws(c) && entryDone) ||
             error()
         )
     }
@@ -238,7 +226,7 @@ function str(done: (str: string) => Parser): Parser {
             (c >= 0x80 &&
                 c <= 0xbf &&
                 ((unicode = (unicode << 6) + c - 0x80),
-                counter == 0 ? charDone(unicode) : (counter--, utf))) ||
+                counter-- === 0 ? charDone(unicode) : utf)) ||
             error()
         )
     }
@@ -257,20 +245,19 @@ function str(done: (str: string) => Parser): Parser {
             (c === 0x6e /* n */ && charDone(0x0a /* \n */)) ||
             (c === 0x72 /* r */ && charDone(0x0d /* \r */)) ||
             (c === 0x74 /* t */ && charDone(0x09 /* \t */)) ||
-            (c === 0x75 /* u */ && unicodeStart) ||
+            (c === 0x75 /* u */ && ((unicode = 0), (counter = 3), unicodeStart)) ||
             error()
         )
     }
 
     function unicodeStart(c: number): Parser {
         unicode = unicode * 16 + (c - 0x30)
-        counter++
 
         return (
             (((c >= 0x30 && c <= 0x39) /* 0 - 9 */ ||
                 (c >= 0x41 && c <= 0x46) /* A - F */ ||
                 (c >= 0x61 && c <= 0x66)) /* a - f */ &&
-                (counter === 4 ? charDone(unicode) : unicodeStart)) ||
+                (counter-- === 0 ? charDone(unicode) : unicodeStart)) ||
             error()
         )
     }
@@ -298,8 +285,7 @@ function num(done: (n: number) => Parser, c: number): Parser {
     function zero(c: number): Parser {
         return (
             (c === 0x2e /* . */ && fractionStart) ||
-            (c === 0x65 /* e */ && expStart) ||
-            (c === 0x45 /* E */ && expStart) ||
+            ((c === 0x65 || c === 0x45) /* e|E */ && expStart) ||
             done(neg ? -0 : 0)(c)
         )
     }
@@ -308,8 +294,7 @@ function num(done: (n: number) => Parser, c: number): Parser {
         return (
             (c >= 0x30 && c <= 0x39 /* 0 - 9 */ && ((n = n * 10 + c - 0x30), intDigit)) ||
             (c === 0x2e /* . */ && fractionStart) ||
-            (c === 0x65 /* e */ && expStart) ||
-            (c === 0x45 /* E */ && expStart) ||
+            ((c === 0x65 || c === 0x45) /* e|E */ && expStart) ||
             done(neg ? -n : n)(c)
         )
     }
@@ -328,8 +313,7 @@ function num(done: (n: number) => Parser, c: number): Parser {
             (c >= 0x30 &&
                 c <= 0x39 /* 0 - 9 */ &&
                 ((n = n + e * (c - 0x30)), (e *= 0.1), fractionDigit)) ||
-            (c === 0x65 /* e */ && expStart) ||
-            (c === 0x45 /* E */ && expStart) ||
+            ((c === 0x65 || c === 0x45) /* e|E */ && expStart) ||
             done(neg ? -n : n)(c)
         )
     }
@@ -370,16 +354,21 @@ function num(done: (n: number) => Parser, c: number): Parser {
 // value
 
 function value(done: (value: any) => Parser, query: Query): Parser {
-    return (c) =>
-        (ws(c) && value(done, query)) ||
-        (c === 0x22 /* " */ && str(done)) ||
-        (c === 0x7b /* { */ && obj(done, query)) ||
-        (c === 0x5b /* [ */ && arr(done, query)) ||
-        (c === 0x74 /* t */ && kw(done, [0x72 /* r */, 0x75 /* u */, 0x65 /* e */], true)) ||
-        (c === 0x66 /* f */ &&
-            kw(done, [0x61 /* a */, 0x6c /* l */, 0x73 /* s */, 0x65 /* e */], false)) ||
-        (c === 0x6e /* n */ && kw(done, [0x75 /* u */, 0x6c /* l */, 0x6c /* l */], null)) ||
-        num(done, c)
+    function doValue(c: number) {
+        return (
+            (c === 0x22 /* " */ && str(done)) ||
+            (c === 0x7b /* { */ && obj(done, query)) ||
+            (c === 0x5b /* [ */ && arr(done, query)) ||
+            (c === 0x74 /* t */ && kw(done, [0x72 /* r */, 0x75 /* u */, 0x65 /* e */], true)) ||
+            (c === 0x66 /* f */ &&
+                kw(done, [0x61 /* a */, 0x6c /* l */, 0x73 /* s */, 0x65 /* e */], false)) ||
+            (c === 0x6e /* n */ && kw(done, [0x75 /* u */, 0x6c /* l */, 0x6c /* l */], null)) ||
+            (ws(c) && value(done, query)) ||
+            num(done, c)
+        )
+    }
+
+    return doValue
 }
 
 // skip
@@ -389,10 +378,10 @@ function valueSkip(next: Parser): Parser {
 
     function skipStart(c: number): Parser {
         return (
-            (ws(c) && skipStart) ||
             (c === 0x22 /* " */ && str(next)) ||
             (c === 0x7b /* { */ && obj) ||
             (c === 0x5b /* [ */ && arr) ||
+            (ws(c) && skipStart) ||
             any
         )
     }
@@ -413,7 +402,7 @@ function valueSkip(next: Parser): Parser {
         return (
             (c === 0x22 /* " */ && str(obj)) ||
             (c === 0x7b /* { */ && (level++, obj)) ||
-            (c === 0x7d /* } */ && (level == 0 ? next : (level--, obj))) ||
+            (c === 0x7d /* } */ && (level-- === 0 ? next : obj)) ||
             obj
         )
     }
@@ -422,7 +411,7 @@ function valueSkip(next: Parser): Parser {
         return (
             (c === 0x22 /* " */ && str(arr)) ||
             (c === 0x5b /* [ */ && (level++, arr)) ||
-            (c === 0x5d /* ] */ && (level == 0 ? next : (level--, arr))) ||
+            (c === 0x5d /* ] */ && (level-- === 0 ? next : arr)) ||
             arr
         )
     }
