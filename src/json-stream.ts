@@ -538,13 +538,8 @@ function parseStream(
 
         i = 0
 
-        try {
-            while (!e && i < buffer.length) {
-                parseByte(buffer[i])
-            }
-        } catch (error) {
-            console.error(error)
-            e = true
+        while (!e && i < buffer.length) {
+            parseByte(buffer[i])
         }
 
         if (e) {
