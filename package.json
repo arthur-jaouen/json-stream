@@ -1,6 +1,6 @@
 {
     "name": "@ja-ja/json-stream",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Lightweight JSON stream parsing library",
     "author": "Arthur Jaouen",
     "license": "MIT",
