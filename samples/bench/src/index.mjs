@@ -1,50 +1,15 @@
 import { open } from 'node:fs/promises'
-import { parse, entries, skip, filter } from '@ja-ja/json-stream'
+import { parser } from '@ja-ja/json-stream'
 import { performance } from 'perf_hooks'
 
 import { avg, sum, median } from './math.mjs'
 
-const BUFFER_SIZE = 1024
-const BENCH_SIZE = 16
-
-const TYPES = {
-    CreateEvent: 'CreateEvent',
-    PushEvent: 'PushEvent',
-    WatchEvent: 'WatchEvent',
-    ReleaseEvent: 'ReleaseEvent',
-    PullRequestEvent: 'PullRequestEvent',
-    IssuesEvent: 'IssuesEvent',
-    ForkEvent: 'ForkEvent',
-    GollumEvent: 'GollumEvent',
-    IssueCommentEvent: 'IssueCommentEvent',
-    DeleteEvent: 'DeleteEvent',
-    PullRequestReviewCommentEvent: 'PullRequestReviewCommentEvent',
-    CommitCommentEvent: 'CommitCommentEvent',
-    MemberEvent: 'MemberEvent',
-    PublicEvent: 'PublicEvent',
-}
-
-function getReader(buffers, name) {
-    let counter = 0
-
-    return {
-        async read() {
-            if (counter === buffers.length) {
-                return { done: true }
-            }
-
-            const res = { done: false, value: buffers[counter++] }
-
-            return res
-        },
-
-        releaseLock() {},
-    }
-}
+const BUFFER_SIZE = 4 * 1024
+const BENCH_SIZE = 1
 
 async function getLargeFile(bufferSize) {
     const buffers = []
-    const handle = await open(new URL('./large-file.json', import.meta.url))
+    const handle = await open(new URL('../../data/large-file.json', import.meta.url), 'r')
 
     while (true) {
         const buffer = new Uint8Array(bufferSize)
@@ -61,57 +26,84 @@ async function getLargeFile(bufferSize) {
     return buffers
 }
 
-async function runFullParse(reader) {
-    await parse(reader, {})
-}
+async function getDistinctLots(buffers) {
+    const lots = new Set()
 
-async function getDistinctTypes(reader) {
-    const types = new Set()
+    const { write, end } = parser({
+        ignore: (path) =>
+            !path.isKey(0, 'features') ||
+            (path.length() > 2 && !path.isKey(2, 'properties')) ||
+            (path.length() > 3 && !path.isKey(3, 'LOT_NUM')),
 
-    await parse(reader, {
-        [entries]: {
-            type: {
-                [filter]: (type) => (types.add(type), false),
-            },
-            [entries]: { [skip]: () => true },
-            [filter]: () => false,
+        drop: (path, value) => {
+            if (
+                path.length() === 4 &&
+                path.isKey(0, 'features') &&
+                path.isKey(2, 'properties') &&
+                path.isKey(3, 'LOT_NUM')
+            ) {
+                lots.add(value)
+            }
+
+            return true
         },
     })
 
-    return types
+    for (let i = 0; i < buffers.length; i++) {
+        write(buffers[i])
+    }
+
+    end()
+
+    return lots
 }
 
-async function getGollumEvents(reader) {
-    return parse(reader, {
-        [entries]: {
-            [filter]: (item) => item.type === TYPES.GollumEvent,
-        },
+async function getFeaturesOnAvenues(buffers) {
+    const { write, end } = parser({
+        drop: (path, value) =>
+            path.length() === 2 && path.isKey(0, 'features') && value.properties.ST_TYPE !== 'AVE',
     })
+
+    for (let i = 0; i < buffers.length; i++) {
+        write(buffers[i])
+    }
+
+    return end()
+}
+
+async function runFullParse(buffers) {
+    const { write, end } = parser({})
+
+    for (let i = 0; i < buffers.length; i++) {
+        write(buffers[i])
+    }
+
+    return end()
+}
+
+function padNum(n, size) {
+    return (
+        (
+            new Intl.NumberFormat('en', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }).format(n > 1000 ? n / 1000 : n) + (n > 1000 ? ' s ' : ' ms')
+        ).padStart(size, ' ') + '  '
+    )
+}
+
+function padStr(str, size) {
+    return str.substring(0, size).padEnd(size, ' ')
 }
 
 async function loop(fn, buffers) {
-    function padNum(n, size) {
-        return (
-            (
-                new Intl.NumberFormat('en', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                }).format(n > 1000 ? n / 1000 : n) + (n > 1000 ? ' s ' : ' ms')
-            ).padStart(size, ' ') + '  '
-        )
-    }
-
-    function padStr(str, size) {
-        return str.substring(0, size).padEnd(size, ' ')
-    }
-
-    for (let i = 0; i < BENCH_SIZE / 8; i++) {
-        await fn(getReader(buffers()))
+    for (let i = 0; i < Math.floor(BENCH_SIZE / 8); i++) {
+        await fn(buffers)
     }
 
     for (let i = 0; i < BENCH_SIZE; i++) {
         performance.mark('start')
-        await fn(getReader(buffers()))
+        fn(buffers)
         performance.measure(fn.name, 'start')
     }
 
@@ -131,9 +123,9 @@ async function loop(fn, buffers) {
 async function bench() {
     const buffers = await getLargeFile(BUFFER_SIZE)
 
-    await loop(runFullParse, () => buffers)
-    await loop(getDistinctTypes, () => buffers)
-    await loop(getGollumEvents, () => buffers)
+    await loop(getDistinctLots, buffers)
+    await loop(getFeaturesOnAvenues, buffers)
+    await loop(runFullParse, buffers)
 }
 
 bench()

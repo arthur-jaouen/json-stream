@@ -1,0 +1,63 @@
+import path from 'path'
+import HtmlWebpackPlugin from 'html-webpack-plugin'
+
+const config = {
+    target: 'web',
+    entry: {
+        index: './src/index',
+    },
+    output: {
+        path: path.resolve('./dist'),
+        publicPath: '',
+        filename: '[name].[contenthash].js',
+        chunkFilename: '[name].[contenthash].js',
+    },
+    resolve: {
+        extensions: ['.js', '.mjs'],
+    },
+    module: {
+        rules: [
+            {
+                test: /\.js$/,
+                exclude: /node_modules/,
+                use: [
+                    {
+                        loader: 'babel-loader',
+                        options: {
+                            sourceMap: true,
+                            cacheDirectory: true,
+                        },
+                    },
+                ],
+            },
+            {
+                test: /\.js$/,
+                enforce: 'pre',
+                use: ['source-map-loader'],
+            },
+        ],
+    },
+    plugins: [
+        new HtmlWebpackPlugin({
+            output: 'index.html',
+            template: 'src/index.html',
+        }),
+    ],
+    stats: {
+        children: false,
+        modules: false,
+    },
+    devServer: {
+        static: {
+            directory: '../data',
+            publicPath: '',
+        },
+    },
+}
+
+export default (_env, argv) => {
+    const mode = argv.mode
+    const devtool = mode === 'development' ? 'cheap-module-source-map' : 'source-map'
+
+    return { ...config, mode, devtool }
+}

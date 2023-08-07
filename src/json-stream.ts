@@ -1,558 +1,731 @@
-export const entries: unique symbol = Symbol()
-export const skip: unique symbol = Symbol()
-export const transform: unique symbol = Symbol()
-export const filter: unique symbol = Symbol()
+export interface Path {
+    /**
+     * Returns the path length
+     *
+     * @returns {number}
+     */
+    length(): number
 
-export type Query = {
-    [key: string]: Query
+    /**
+     * Returns true if the given path item is equal to the given key
+     *
+     * @param {number} item
+     * @param {string} key
+     * @returns {boolean}
+     */
+    isKey(item: number, key: string): boolean
 
-    [entries]?: Query
-    [skip]?: (key: string) => boolean
-    [transform]?: (value: any) => any
-    [filter]?: (value: any) => boolean
+    /**
+     * Returns true if the given path item is equal to the given index
+     *
+     * @param {number} item
+     * @param {number} index
+     * @returns {boolean}
+     */
+    isIndex(item: number, index: number): boolean
+
+    /**
+     * Returns true if the given path item starts with the given key
+     *
+     * @param {number} item
+     * @param {string} key
+     * @returns {boolean}
+     */
+    startsWith(item: number, key: string): boolean
+
+    /**
+     * Returns true if the given path item ends with the given key
+     *
+     * @param {number} item
+     * @param {string} key
+     * @returns {boolean}
+     */
+    endsWith(item: number, key: string): boolean
 }
 
-export interface StreamReader<T> {
-    read(): Promise<{ done: boolean; value?: T }>
+export interface Options {
+    /**
+     * Called before parsing a value, if it returns true the value will be skipped,
+     * it will still be parsed but won't be created and no other callback will be called on it
+     *
+     * @param {Path} path
+     * @returns {boolean}
+     */
+    ignore?(path: Path): boolean
 
-    releaseLock(): void
+    /**
+     * Called before parsing a value, if it returns true the raw json string value will be used,
+     * it will still be parsed but won't be created as a JS value and no callback will be called on its children.
+     * The transform and drop callbacks will be called with the raw value
+     *
+     * @param {Path} path
+     * @returns {boolean}
+     */
+    raw?(path: Path): boolean
+
+    /**
+     * Called after parsing a value, the returned value will be saved into the parent
+     *
+     * @param {Path} path
+     * @param {T} value
+     * @returns {U}
+     */
+    transform?<T = unknown>(path: Path, value: T): unknown
+
+    /**
+     * Called after transform, if it returns true the value won't be saved into the parent,
+     * potentially freeing it for garbage collection
+     *
+     * @param {Path} path
+     * @param {T} value
+     * @returns {boolean}
+     */
+    drop?<T = unknown>(path: Path, value: T): boolean
 }
 
-export function parse<T = any>(reader: StreamReader<Uint8Array>, query: Query): Promise<T> {
-    return new Promise(parseStream.bind(null, reader, query))
+export interface Parser {
+    /**
+     * Parse a chunk of JSON data
+     *
+     * @param {ArrayLike<number>} buffer A byte array
+     * @throws {RangeError} If the parser is in an error or end state
+     * @throws {SyntaxError} If there is a syntax error
+     */
+    write(chunk: Uint8Array): void
+
+    /**
+     * Finish parsing the JSON document and return the result
+     *
+     * @returns {T} The parsed (and potentially tranformed) JSON document
+     * @throws {RangeError} If the parser is in an error or end state
+     * @throws {SyntaxError} If the parser is in a non-terminal state (early end of file)
+     */
+    end<T = any>(): T
 }
 
-const STATE_VALUE = 0
-const STATE_VALUE_DONE = 1
-const STATE_END = 2
-const STATE_SKIP = 3
-const STATE_SKIP_OBJ = 4
-const STATE_SKIP_ARR = 5
-const STATE_SKIP_STR = 6
-const STATE_SKIP_STR_SLASH = 7
-const STATE_SKIP_ANY = 8
-const STATE_OBJ = 9
-const STATE_OBJ_KEY_DONE = 10
-const STATE_OBJ_VALUE_DONE = 11
-const STATE_OBJ_ENTRY_DONE = 12
-const STATE_ARR = 13
-const STATE_ARR_VALUE_DONE = 14
-const STATE_ARR_ENTRY_DONE = 15
-const STATE_STR = 16
-const STATE_STR_UTF_1 = 17
-const STATE_STR_UTF_2 = 18
-const STATE_STR_UTF_3 = 19
-const STATE_STR_SLASH = 20
-const STATE_STR_UNICODE_1 = 21
-const STATE_STR_UNICODE_2 = 22
-const STATE_STR_UNICODE_3 = 23
-const STATE_STR_UNICODE_4 = 24
-const STATE_NUM_MINUS = 25
-const STATE_NUM_ZERO = 26
-const STATE_NUM_INT = 27
-const STATE_NUM_DOT = 28
-const STATE_NUM_FRACTION = 29
-const STATE_NUM_EXP = 30
-const STATE_NUM_EXP_SIGNED = 31
-const STATE_NUM_EXP_DIGIT = 32
-const STATE_TRUE_T = 33
-const STATE_TRUE_R = 34
-const STATE_TRUE_U = 35
-const STATE_FALSE_F = 36
-const STATE_FALSE_A = 37
-const STATE_FALSE_L = 38
-const STATE_FALSE_S = 39
-const STATE_NULL_N = 40
-const STATE_NULL_U = 41
-const STATE_NULL_L = 42
+const CLASS_COUNT = 36,
+    STATE_COUNT = 30,
+    N_SHIFT = 6,
+    I_SHIFT = 12,
+    P_SHIFT = 18,
+    MASK = 0b111111,
+    END = (2 << 29) + 1
 
-function ws(b: number): boolean {
-    return b === 0x20 /* ' ' */ || b === 0x0a /* \n */ || b === 0x0d /* \r */ || b === 0x09 /* \t */
+// prettier-ignore
+const enum C {
+    ERR     = ' ', UTF_B   = '!', UTF_1   = '"', UTF_2   = '#',
+    UTF_3   = '$', CHR     = '%', DIGIT   = '&', COLON   = "'",
+    SPACE   = '(', HEX_H   = ')', HEX_L   = '*', OBJ_L   = '+',
+    OBJ_R   = ',', ARR_L   = '-', ARR_R   = '.', WS      = '/',
+    COMMA   = '0', QUOTE   = '1', CHR_A   = '2', CHR_B   = '3',
+    CHR_E   = '4', CHR_F   = '5', CHR_L   = '6', CHR_N   = '7',
+    CHR_R   = '8', CHR_S   = '9', CHR_T   = ':', CHR_U   = ';',
+    ESC     = '<', SLASH   = '=', ZERO    = '>', DOT     = '?',
+    PLUS    = '@', MINUS   = 'A', EXP     = 'B', END     = 'C',
 }
 
-function hex(b: number): boolean {
-    return (
-        (b >= 0x30 && b <= 0x39) /* 0 - 9 */ ||
-        (b >= 0x41 && b <= 0x46) /* A - F */ ||
-        (b >= 0x61 && b <= 0x66) /* a - f */
+// prettier-ignore
+const enum S {
+    VAL     = ' ', END     = '!', OBJ     = '"', O_KEY   = '#',
+    O_SEP   = '$', O_NEXT  = '%', ARR     = '&', A_NEXT  = "'",
+    STR     = '(', S_U     = ')', ESC     = '*', ESC_U   = '+',
+    N_MINUS = ',', N_ZERO  = '-', N_INT   = '.', N_FRAC  = '/',
+    N_E_DIG = '0', N_DOT   = '1', N_E     = '2', N_E_SIG = '3',
+    TRUE_T  = '4', TRUE_R  = '5', TRUE_U  = '6', FALSE_F = '7',
+    FALSE_A = '8', FALSE_L = '9', FALSE_S = ':', NULL_N  = ';',
+    NULL_U  = '<', NULL_L  = '=', DONE    = '>', ERR     = '?',
+}
+
+// prettier-ignore
+const enum A {
+    RECORD  = ' ', ERR     = '!', POP_PAR = '"', FLAG    = '#',
+    O_INI   = '$', O_IGN   = '%', A_INI   = '&', A_INCR  = "'",
+    S_INI   = '(', S_ADD   = ')', S_U_INI = '*', S_U     = '+',
+    ESC     = ',', ESC_U   = '-', S_POP   = '.', N_INI   = '/',
+    N_POP   = '0', POP     = '1', I_FLAG  = '2', I_INI   = '3',
+    I_U_INI = '4', I_U     = '5', I_POP   = '6', I_POP_S = '7',
+    I_POP_N = '8', NONE    = '9'
+}
+
+// prettier-ignore
+const enum Ss {
+    VAL,           END,           OBJ,           O_KEY,
+    O_SEP,         O_NEXT,        ARR,           A_NEXT,
+    STR,           S_U,           ESC,           ESC_U,
+    N_MINUS,       N_ZERO,        N_INT,         N_FRAC,
+    N_E_DIG,       N_DOT,         N_E,           N_E_SIG,
+    TRUE_T,        TRUE_R,        TRUE_U,        FALSE_F,
+    FALSE_A,       FALSE_L,       FALSE_S,       NULL_N,
+    NULL_U,        NULL_L,        DONE,          ERR,
+}
+
+// prettier-ignore
+const enum Aa {
+    RECORD,        ERR,           POP_PAR,       FLAG,
+    O_INI,         O_IGN,         A_INI,         A_INCR,
+    S_INI,         S_ADD,         S_U_INI,       S_U,
+    ESC,           ESC_U,         S_POP,         N_INI,
+    N_POP,         POP,           I_FLAG,        I_INI,
+    I_U_INI,       I_U,           I_POP,         I_POP_S,
+    I_POP_N,       NONE
+}
+
+const decodeByte = (s: string, i: number) => s.charCodeAt(i) - 0x20
+
+// prettier-ignore
+const CLASSES = Uint8Array.from('' +
+    C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   +
+    C.ERR   + C.WS    + C.WS    + C.ERR   + C.ERR   + C.WS    + C.ERR   + C.ERR   +
+    C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   +
+    C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   +
+    C.SPACE + C.CHR   + C.QUOTE + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR   + C.PLUS  + C.COMMA + C.MINUS + C.DOT   + C.SLASH +
+    C.ZERO  + C.DIGIT + C.DIGIT + C.DIGIT + C.DIGIT + C.DIGIT + C.DIGIT + C.DIGIT +
+    C.DIGIT + C.DIGIT + C.COLON + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   +
+    C.CHR   + C.HEX_H + C.HEX_H + C.HEX_H + C.HEX_H + C.EXP   + C.HEX_H + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR   + C.ARR_L + C.ESC   + C.ARR_R + C.CHR   + C.CHR   +
+    C.CHR   + C.CHR_A + C.CHR_B + C.HEX_L + C.HEX_L + C.CHR_E + C.CHR_F + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR   + C.CHR   + C.CHR_L + C.CHR   + C.CHR_N + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR_R + C.CHR_S + C.CHR_T + C.CHR_U + C.CHR   + C.CHR   +
+    C.CHR   + C.CHR   + C.CHR   + C.OBJ_L + C.CHR   + C.OBJ_R + C.CHR   + C.CHR   +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B + C.UTF_B +
+    C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 +
+    C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 +
+    C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 +
+    C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 + C.UTF_1 +
+    C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 +
+    C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 + C.UTF_2 +
+    C.UTF_3 + C.UTF_3 + C.UTF_3 + C.UTF_3 + C.UTF_3 + C.UTF_3 + C.UTF_3 + C.UTF_3 +
+    C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   + C.ERR   +
+    C.END, (c) => decodeByte(c, 0))
+
+// prettier-ignore
+const TABLE = Int32Array.from((
+
+    // S.VAL
+    C.OBJ_L + S.OBJ + A.O_INI + A.I_INI + '!' /* 1 */ + '~' +
+    C.ARR_L + S.ARR + A.A_INI + A.I_INI + ' ' /* 0 */ + '~' +
+    C.QUOTE + S.STR + A.S_INI + '~' +
+    C.MINUS + S.N_MINUS + A.N_INI + '~' +
+    C.ZERO + S.N_ZERO + A.N_INI + '~' +
+    C.DIGIT + S.N_INT + A.N_INI + '~' +
+    C.CHR_T + S.TRUE_T + A.NONE + '~' +
+    C.CHR_F + S.FALSE_F + A.NONE + '~' +
+    C.CHR_N + S.NULL_N + A.NONE + '~' +
+    C.SPACE + S.VAL + A.NONE + A.NONE + '~' +
+    C.WS + S.VAL + A.NONE + A.NONE + '}' +
+
+    // S.END
+    C.SPACE + S.END + A.NONE + '~' +
+    C.WS + S.END + A.NONE + A.NONE + '~' +
+    C.END + S.DONE + A.NONE + A.NONE + '}' +
+
+    // S.OBJ
+    C.OBJ_R + S.ERR + A.POP_PAR + A.I_POP + '#' /* 3 */ + '~' +
+    C.QUOTE + S.STR + A.FLAG + A.I_FLAG + '~' +
+    C.SPACE + S.OBJ + A.NONE + A.NONE + '~' +
+    C.WS + S.OBJ + A.NONE + A.NONE + '}' +
+
+    // S.O_KEY
+    C.QUOTE + S.STR + A.FLAG + A.I_FLAG + '~' +
+    C.SPACE + S.O_KEY + A.NONE + A.NONE + '~' +
+    C.WS + S.O_KEY + A.NONE + A.NONE + '}' +
+
+    // S.O_SEP
+    C.COLON + S.VAL + A.O_IGN + '~' +
+    C.SPACE + S.O_SEP + A.NONE + A.NONE + '~' +
+    C.WS + S.O_SEP + A.NONE + A.NONE + '}' +
+
+    // S.O_NEXT
+    C.OBJ_R + S.ERR + A.POP_PAR + A.I_POP + '#' /* 3 */ + '~' +
+    C.COMMA + S.O_KEY + A.NONE + '~' +
+    C.SPACE + S.O_NEXT + A.NONE + A.NONE + '~' +
+    C.WS + S.O_NEXT + A.NONE + A.NONE + '}' +
+
+    // S.ARR
+    C.ARR_R + S.ERR + A.POP_PAR + A.I_POP + '#' /* 3 */ + '~' +
+    C.OBJ_L + S.OBJ + A.O_INI + A.I_INI + '!' /* 1 */ + '~' +
+    C.ARR_L + S.ARR + A.A_INI + A.I_INI + ' ' /* 0 */ + '~' +
+    C.QUOTE + S.STR + A.S_INI + '~' +
+    C.MINUS + S.N_MINUS + A.N_INI + '~' +
+    C.ZERO + S.N_ZERO + A.N_INI + '~' +
+    C.DIGIT + S.N_INT + A.N_INI + '~' +
+    C.CHR_T + S.TRUE_T + A.NONE + '~' +
+    C.CHR_F + S.FALSE_F + A.NONE + '~' +
+    C.CHR_N + S.NULL_N + A.NONE + '~' +
+    C.SPACE + S.ARR + A.NONE + A.NONE + '~' +
+    C.WS + S.ARR + A.NONE + A.NONE + '}' +
+
+    // S.A_NEXT
+    C.ARR_R + S.ERR + A.POP_PAR + A.I_POP + '#' /* 3 */ + '~' +
+    C.COMMA + S.VAL + A.A_INCR + '~' +
+    C.SPACE + S.A_NEXT + A.NONE + A.NONE + '~' +
+    C.WS + S.A_NEXT + A.NONE + A.NONE + '}' +
+
+    // S.STR
+    C.QUOTE + S.ERR + A.S_POP + A.I_POP_S + '~' +
+    C.SPACE + S.STR + A.S_ADD + '~' +
+    C.CHR + S.STR + A.S_ADD + '~' +
+    C.COMMA + S.STR + A.S_ADD + '~' +
+    C.DOT + S.STR + A.S_ADD + '~' +
+    C.SLASH + S.STR + A.S_ADD + '~' +
+    C.ZERO + S.STR + A.S_ADD + '~' +
+    C.DIGIT + S.STR + A.S_ADD + '~' +
+    C.COLON + S.STR + A.S_ADD + '~' +
+    C.HEX_H + S.STR + A.S_ADD + '~' +
+    C.HEX_L + S.STR + A.S_ADD + '~' +
+    C.EXP + S.STR + A.S_ADD + '~' +
+    C.ARR_L + S.STR + A.S_ADD + '~' +
+    C.ESC + S.ESC + A.NONE + '~' +
+    C.ARR_R + S.STR + A.S_ADD + '~' +
+    C.CHR_A + S.STR + A.S_ADD + '~' +
+    C.CHR_B + S.STR + A.S_ADD + '~' +
+    C.CHR_E + S.STR + A.S_ADD + '~' +
+    C.CHR_F + S.STR + A.S_ADD + '~' +
+    C.CHR_L + S.STR + A.S_ADD + '~' +
+    C.CHR_N + S.STR + A.S_ADD + '~' +
+    C.CHR_R + S.STR + A.S_ADD + '~' +
+    C.CHR_S + S.STR + A.S_ADD + '~' +
+    C.CHR_T + S.STR + A.S_ADD + '~' +
+    C.CHR_U + S.STR + A.S_ADD + '~' +
+    C.OBJ_L + S.STR + A.S_ADD + '~' +
+    C.OBJ_R + S.STR + A.S_ADD + '~' +
+    C.PLUS + S.STR + A.S_ADD + '~' +
+    C.MINUS + S.STR + A.S_ADD + '~' +
+    C.UTF_1 + S.S_U + A.S_U_INI + A.I_U_INI + ' ' /* 0 */ + '~' +
+    C.UTF_2 + S.S_U + A.S_U_INI + A.I_U_INI + '!' /* 1 */ + '~' +
+    C.UTF_3 + S.S_U + A.S_U_INI + A.I_U_INI + '"' /* 2 */ + '}' +
+
+    // S.S_U
+    C.UTF_B + S.S_U + A.S_U + A.I_U + '}' +
+
+    // S.ESC
+    C.QUOTE + S.STR + A.S_ADD + '~' +
+    C.ESC + S.STR + A.S_ADD + '~' +
+    C.SLASH + S.STR + A.S_ADD + '~' +
+    C.CHR_B + S.STR + A.ESC + A.RECORD + '(' /* 0x08 */ + '~' +
+    C.CHR_F + S.STR + A.ESC + A.RECORD + ',' /* 0x0c */ + '~' +
+    C.CHR_N + S.STR + A.ESC + A.RECORD + '*' /* 0x0a */ + '~' +
+    C.CHR_R + S.STR + A.ESC + A.RECORD + '-' /* 0x0d */ + '~' +
+    C.CHR_T + S.STR + A.ESC + A.RECORD + ')' /* 0x09 */ + '~' +
+    C.CHR_U + S.ESC_U + A.NONE + A.I_U_INI + '#' /* 3 */ + '}' +
+
+    // S.ESC_U
+    C.ZERO + S.ESC_U + A.ESC_U + A.I_U + 'P' /* 0x30 */ + '~' +
+    C.DIGIT + S.ESC_U + A.ESC_U + A.I_U + 'P' /* 0x30 */ + '~' +
+    C.HEX_H + S.ESC_U + A.ESC_U + A.I_U + 'W' /* 0x37 */ + '~' +
+    C.EXP + S.ESC_U + A.ESC_U + A.I_U + 'W' /* 0x37 */ + '~' +
+    C.HEX_L + S.ESC_U + A.ESC_U + A.I_U + 'w' /* 0x57 */ + '~' +
+    C.CHR_A + S.ESC_U + A.ESC_U + A.I_U + 'w' /* 0x57 */ + '~' +
+    C.CHR_B + S.ESC_U + A.ESC_U + A.I_U + 'w' /* 0x57 */ + '~' +
+    C.CHR_E + S.ESC_U + A.ESC_U + A.I_U + 'w' /* 0x57 */ + '~' +
+    C.CHR_F + S.ESC_U + A.ESC_U + A.I_U + 'w' /* 0x57 */ + '}' +
+
+    // S.N_MINUS
+    C.ZERO + S.N_ZERO + A.S_ADD + '~' +
+    C.DIGIT + S.N_INT + A.S_ADD + '}' +
+
+    // S.N_ZERO
+    C.DOT + S.N_DOT + A.S_ADD + '~' +
+    C.CHR_E + S.N_E + A.S_ADD + '~' +
+    C.EXP + S.N_E + A.S_ADD + '}' +
+
+    // S.N_INT
+    C.ZERO + S.N_INT + A.S_ADD + '~' +
+    C.DIGIT + S.N_INT + A.S_ADD + '~' +
+    C.DOT + S.N_DOT + A.S_ADD + '~' +
+    C.CHR_E + S.N_E + A.S_ADD + '~' +
+    C.EXP + S.N_E + A.S_ADD + '}' +
+
+    // S.N_FRAC
+    C.ZERO + S.N_FRAC + A.S_ADD + '~' +
+    C.DIGIT + S.N_FRAC + A.S_ADD + '~' +
+    C.CHR_E + S.N_E + A.S_ADD + '~' +
+    C.EXP + S.N_E + A.S_ADD + '}' +
+
+    // S.N_E_DIG
+    C.ZERO + S.N_E_DIG + A.S_ADD + '~' +
+    C.DIGIT + S.N_E_DIG + A.S_ADD + '}' +
+
+    // S.N_DOT
+    C.ZERO + S.N_FRAC + A.S_ADD + '~' +
+    C.DIGIT + S.N_FRAC + A.S_ADD + '}' +
+
+    // S.N_E
+    C.ZERO + S.N_E_DIG + A.S_ADD + '~' +
+    C.DIGIT + S.N_E_DIG + A.S_ADD + '~' +
+    C.PLUS + S.N_E_SIG + A.S_ADD + '~' +
+    C.MINUS + S.N_E_SIG + A.S_ADD + '}' +
+
+    // S.N_E_SIG
+    C.ZERO + S.N_E_DIG + A.S_ADD + '~' +
+    C.DIGIT + S.N_E_DIG + A.S_ADD + '}' +
+
+    // S.TRUE_T
+    C.CHR_R + S.TRUE_R + A.NONE + '}' +
+
+    // S.TRUE_R
+    C.CHR_U + S.TRUE_U + A.NONE + '}' +
+
+    // S.TRUE_U
+    C.CHR_E + S.ERR + A.POP + A.I_POP + '!' /* 1 */ + '}' +
+
+    // S.FALSE_F
+    C.CHR_A + S.FALSE_A + A.NONE + '}' +
+
+    // S.FALSE_A
+    C.CHR_L + S.FALSE_L + A.NONE + '}' +
+
+    // S.FALSE_L
+    C.CHR_S + S.FALSE_S + A.NONE + '}' +
+
+    // S.FALSE_S
+    C.CHR_E + S.ERR + A.POP + A.I_POP + ' ' /* 0 */ + '}' +
+
+    // S.NULL_N
+    C.CHR_U + S.NULL_U + A.NONE + '}' +
+
+    // S.NULL_U
+    C.CHR_L + S.NULL_L + A.NONE + '}' +
+
+    // S.NULL_L
+    C.CHR_L + S.ERR + A.POP + A.I_POP + '"' /* 2 */
+
+).split('}').flatMap((transition, i) => {
+    const a = Array(CLASS_COUNT).fill(
+        i >= Ss.N_ZERO && i <= Ss.N_E_DIG
+            ? (Aa.N_POP << N_SHIFT) | (Aa.I_POP_N << I_SHIFT)
+            : (Aa.ERR << N_SHIFT) | (Aa.ERR << I_SHIFT)
     )
-}
 
-function parseStream(
-    reader: StreamReader<Uint8Array>,
-    query: Query,
-    resolve: (result: any) => void,
-    reject: (error: Error) => void
-) {
-    let s: number = STATE_VALUE
-    let i: number = 0
+    transition.split('~').forEach((edge) => {
+        a[decodeByte(edge, 0)] =
+            decodeByte(edge, 1) |
+            (decodeByte(edge, 2) << N_SHIFT) |
+            (decodeByte(edge, 3) << I_SHIFT) |
+            (decodeByte(edge, 4) << P_SHIFT)
+    })
 
-    let v: any = null
-    let d: boolean = false
-    let e: boolean = false
+    return a
+}))
 
-    let cur: number = 0
-    let str: number[] = []
-    let neg: boolean = false
+// eslint-disable-next-line prefer-spread
+const decode = (codes: number[]) => String.fromCharCode.apply(String, codes)
 
-    const states: number[] = [STATE_VALUE_DONE]
+const f = () => false
+
+/**
+ * Create a JSON streaming parser with the given options
+ *
+ * @param {Options} options
+ * @returns {Parser}
+ */
+export const parser = (options: Options): Parser => {
+    let state = Ss.VAL
+    let i = 0
+    let parent: any = null
+    let val: any = null
+
+    let flag = 0
+    let record = 0
+    let num = 0
+    let counter = 0
+    let cursor = 0
+    let shift = N_SHIFT
+
+    const ignore = options.ignore || f
+    const raw = options.raw || f
+    const transform = options.transform || ((_, v) => v)
+    const drop = options.drop || f
+
     const values: any[] = []
-    const queries: Query[] = []
-
-    function doValue(b: number): void {
-        values.push(v)
-
-        b === 0x22 /* " */
-            ? (s = STATE_STR)
-            : b === 0x7b /* { */
-            ? ((v = {}), (s = STATE_OBJ))
-            : b === 0x5b /* [ */
-            ? ((v = []), (s = STATE_ARR))
-            : b === 0x74 /* t */
-            ? (s = STATE_TRUE_T)
-            : b === 0x66 /* f */
-            ? (s = STATE_FALSE_F)
-            : b === 0x6e /* n */
-            ? (s = STATE_NULL_N)
-            : b === 0x2d /* - */
-            ? (s = STATE_NUM_MINUS)
-            : b === 0x30 /* 0 */
-            ? (s = STATE_NUM_ZERO)
-            : b >= 0x31 && b <= 0x39 /* 1 - 9 */
-            ? ((v = b - 0x30), (s = STATE_NUM_INT))
-            : (e = true)
-    }
-
-    function doSkip(b: number): void {
-        b === 0x7b /* { */
-            ? ((cur = 0), (s = STATE_SKIP_OBJ))
-            : b === 0x5b /* [ */
-            ? ((cur = 0), (s = STATE_SKIP_ARR))
-            : b === 0x22 /* " */
-            ? (s = STATE_SKIP_STR)
-            : ws(b) ||
-              (b === 0x5d /* ] */ || b === 0x7d /* } */ || b === 0x2c /* , */
-                  ? ((s = states.pop()!), i--)
-                  : (s = STATE_SKIP_ANY))
-    }
-
-    function entryDone(b: number, delim: number, state: number): void {
-        b === 0x2c /* , */ ? (s = state) : b === delim ? (s = states.pop()!) : ws(b) || (e = true)
-    }
-
-    function parseByte(b: number): void {
-        i++
-
-        switch (s) {
-            // Root
-            case STATE_VALUE:
-                ws(b) || doValue(b)
-                break
-
-            case STATE_VALUE_DONE:
-                query[transform] && (v = query[transform]!(v)), (d = true), (s = STATE_END)
-                b === 0 || ws(b) || (e = true)
-                break
-
-            case STATE_END:
-                b === 0 || ws(b) || (e = true)
-                break
-
-            // Skip
-            case STATE_SKIP:
-                doSkip(b)
-                break
-
-            case STATE_SKIP_OBJ:
-                b === 0x22 /* " */
-                    ? (states.push(STATE_SKIP_OBJ), (s = STATE_SKIP_STR))
-                    : b === 0x7b /* { */
-                    ? cur++
-                    : b === 0x7d /* } */ && cur-- === 0 && (s = states.pop()!)
-
-                break
-
-            case STATE_SKIP_ARR:
-                b === 0x22 /* " */
-                    ? (states.push(STATE_SKIP_ARR), (s = STATE_SKIP_STR))
-                    : b === 0x5b /* [ */
-                    ? cur++
-                    : b === 0x5d /* ] */ && cur-- === 0 && (s = states.pop()!)
-
-                break
-
-            case STATE_SKIP_STR:
-                b === 0x22 /* " */
-                    ? (s = states.pop()!)
-                    : b === 0x5c /* \ */ && (s = STATE_SKIP_STR_SLASH)
-
-                break
-
-            case STATE_SKIP_STR_SLASH:
-                s = STATE_SKIP_STR
-
-                break
-
-            case STATE_SKIP_ANY:
-                if (b === 0x5d /* ] */ || b === 0x7d /* } */ || b === 0x2c /* , */) {
-                    s = states.pop()!
-                    i--
-                }
-
-                break
-
-            // Object
-            case STATE_OBJ:
-                b === 0x22 /* " */
-                    ? (values.push(v), states.push(STATE_OBJ_KEY_DONE), (s = STATE_STR))
-                    : b === 0x7d /* } */
-                    ? (s = states.pop()!)
-                    : ws(b) || (e = true)
-
-                break
-
-            case STATE_OBJ_KEY_DONE:
-                if (b == 0x3a /* : */) {
-                    const q = query[v] || query[entries] || {}
-
-                    if (q[skip] && q[skip]!(v)) {
-                        v = values.pop()!
-                        states.push(STATE_OBJ_ENTRY_DONE)
-                        s = STATE_SKIP
-                    } else {
-                        queries.push(query)
-                        query = q
-                        states.push(STATE_OBJ_VALUE_DONE)
-                        s = STATE_VALUE
-                    }
-                } else {
-                    ws(b) || (e = true)
-                }
-
-                break
-
-            case STATE_OBJ_VALUE_DONE:
-                if (query[transform]) {
-                    v = query[transform]!(v)
-                }
-
-                const val = v
-                const key = values.pop()!
-                v = values.pop()!
-
-                if (!query[filter] || query[filter]!(val)) {
-                    v[key] = val
-                }
-
-                query = queries.pop()!
-                s = STATE_OBJ_ENTRY_DONE
-                entryDone(b, 0x7d /* } */, STATE_OBJ)
-                break
-
-            case STATE_OBJ_ENTRY_DONE:
-                entryDone(b, 0x7d /* } */, STATE_OBJ)
-                break
-
-            // Array
-            case STATE_ARR:
-                if (b == 0x5d /* ] */) {
-                    s = states.pop()!
-                } else if (ws(b)) {
-                    // TODO
-                } else {
-                    const q = query[entries] || {}
-
-                    if (q[skip] && q[skip]!('')) {
-                        states.push(STATE_ARR_ENTRY_DONE)
-                        doSkip(b)
-                    } else {
-                        queries.push(query)
-                        query = q
-                        states.push(STATE_ARR_VALUE_DONE)
-                        doValue(b)
-                    }
-                }
-
-                break
-
-            case STATE_ARR_VALUE_DONE:
-                if (query[transform]) {
-                    v = query[transform]!(v)
-                }
-
-                const item = v
-                v = values.pop()!
-
-                if (!query[filter] || query[filter]!(item)) {
-                    v.push(item)
-                }
-
-                query = queries.pop()!
-                s = STATE_ARR_ENTRY_DONE
-                entryDone(b, 0x5d /* ] */, STATE_ARR)
-
-                break
-
-            case STATE_ARR_ENTRY_DONE:
-                entryDone(b, 0x5d /* ] */, STATE_ARR)
-                break
-
-            // String
-            case STATE_STR:
-                b === 0x22 /* " */
-                    ? ((v = String.fromCharCode(...str)), (str.length = 0), (s = states.pop()!))
-                    : b === 0x5c /* \ */
-                    ? (s = STATE_STR_SLASH)
-                    : b >= 0x20 /* ' ' */ && b <= 0x7f /* DEL */
-                    ? str.push(b)
-                    : b >= 0xc0 && b <= 0xdf
-                    ? ((cur = b - 0xc0), (s = STATE_STR_UTF_1))
-                    : b >= 0xe0 && b <= 0xef
-                    ? ((cur = b - 0xe0), (s = STATE_STR_UTF_2))
-                    : b >= 0xf0 && b <= 0xf7
-                    ? ((cur = b - 0xf0), (s = STATE_STR_UTF_3))
-                    : (e = true)
-
-                break
-
-            case STATE_STR_UTF_1:
-                if (b >= 0x80 && b <= 0xbf) {
-                    str.push((cur << 6) + b - 0x80)
-                    s = STATE_STR
-                } else {
-                    e = true
-                }
-
-                break
-
-            case STATE_STR_UTF_2:
-            case STATE_STR_UTF_3:
-                if (b >= 0x80 && b <= 0xbf) {
-                    cur = (cur << 6) + b - 0x80
-                    s--
-                } else {
-                    e = true
-                }
-
-                break
-
-            case STATE_STR_SLASH:
-                s = STATE_STR
-
-                b === 0x22 /* " */ || b === 0x5c /* \ */ || b === 0x2f /* / */
-                    ? str.push(b)
-                    : b === 0x62 /* b */
-                    ? str.push(0x08)
-                    : b === 0x66 /* f */
-                    ? str.push(0x0c)
-                    : b === 0x6e /* n */
-                    ? str.push(0x0a)
-                    : b === 0x72 /* r */
-                    ? str.push(0x0d)
-                    : b === 0x74 /* t */
-                    ? str.push(0x09)
-                    : b === 0x75 /* u */
-                    ? ((cur = 0), (s = STATE_STR_UNICODE_4))
-                    : (e = true)
-
-                break
-
-            case STATE_STR_UNICODE_1:
-                if (hex(b)) {
-                    str.push(cur * 16 + b - 0x30)
-                    s = STATE_STR
-                } else {
-                    e = true
-                }
-
-                break
-
-            case STATE_STR_UNICODE_2:
-            case STATE_STR_UNICODE_3:
-            case STATE_STR_UNICODE_4:
-                if (hex(b)) {
-                    cur = cur * 16 + b - 0x30
-                    s--
-                } else {
-                    e = true
-                }
-
-                break
-
-            // Number
-            case STATE_NUM_MINUS:
-                neg = true
-
-                if (b === 0x30 /* 0 */) {
-                    s = STATE_NUM_ZERO
-                } else if (b >= 0x31 && b <= 0x39 /* 1 - 9 */) {
-                    v = b - 0x30
-                    s = STATE_NUM_INT
-                } else {
-                    e = true
-                }
-
-                break
-
-            case STATE_NUM_ZERO:
-                b === 0x2e /* . */
-                    ? (s = STATE_NUM_DOT)
-                    : b === 0x65 || b === 0x45 /* e|E */
-                    ? (s = STATE_NUM_EXP)
-                    : ((v = neg ? -0 : 0), (neg = false), (s = states.pop()!), i--)
-
-                break
-
-            case STATE_NUM_INT:
-                b >= 0x30 && b <= 0x39 /* 0 - 9 */
-                    ? ((v = v * 10 + b - 0x30), (s = STATE_NUM_INT))
-                    : b === 0x2e /* . */
-                    ? (s = STATE_NUM_DOT)
-                    : b === 0x65 || b === 0x45 /* e|E */
-                    ? (s = STATE_NUM_EXP)
-                    : ((v = neg ? -v : v), (neg = false), (s = states.pop()!), i--)
-
-                break
-
-            case STATE_NUM_DOT:
-                if (b >= 0x30 && b <= 0x39 /* 0 - 9 */) {
-                    v = v + 0.1 * (b - 0x30)
-                    cur = 100
-                    s = STATE_NUM_FRACTION
-                } else {
-                    e = true
-                }
-
-                break
-
-            case STATE_NUM_FRACTION:
-                if (b >= 0x30 && b <= 0x39 /* 0 - 9 */) {
-                    v = v + (b - 0x30) / cur
-                    cur *= 10
-                    s = STATE_NUM_FRACTION
-                } else if (b === 0x65 || b === 0x45 /* e|E */) {
-                    s = STATE_NUM_EXP
-                } else {
-                    v = neg ? -v : v
-                    neg = false
-                    s = states.pop()!
-                    i--
-                }
-
-                break
-
-            case STATE_NUM_EXP:
-                v = neg ? -v : v
-                neg = false
-
-                b >= 0x30 && b <= 0x39 /* 0 - 9 */
-                    ? ((cur = b - 0x30), (s = STATE_NUM_EXP_DIGIT))
-                    : b === 0x2b /* + */
-                    ? (s = STATE_NUM_EXP_SIGNED)
-                    : b === 0x2d /* - */
-                    ? ((neg = true), (s = STATE_NUM_EXP_SIGNED))
-                    : (e = true)
-
-                break
-
-            case STATE_NUM_EXP_SIGNED:
-                if (b >= 0x30 && b <= 0x39 /* 0 - 9 */) {
-                    cur = b - 0x30
-                    s = STATE_NUM_EXP_DIGIT
-                } else {
-                    e = true
-                }
-
-                break
-
-            case STATE_NUM_EXP_DIGIT:
-                if (b >= 0x30 && b <= 0x39 /* 0 - 9 */) {
-                    cur = cur * 10 + b - 0x30
-                    s = STATE_NUM_EXP_DIGIT
-                } else {
-                    v = neg ? v / Math.pow(10, cur) : v * Math.pow(10, cur)
-                    neg = false
-                    s = states.pop()!
-                    i--
-                }
-
-                break
-
-            // True
-            case STATE_TRUE_T:
-                b === 0x72 /* r */ ? (s = STATE_TRUE_R) : (e = true)
-                break
-            case STATE_TRUE_R:
-                b === 0x75 /* u */ ? (s = STATE_TRUE_U) : (e = true)
-                break
-            case STATE_TRUE_U:
-                b === 0x65 /* e */ ? ((v = true), (s = states.pop()!)) : (e = true)
-                break
-
-            // False
-            case STATE_FALSE_F:
-                b === 0x61 /* a */ ? (s = STATE_FALSE_A) : (e = true)
-                break
-            case STATE_FALSE_A:
-                b === 0x6c /* l */ ? (s = STATE_FALSE_L) : (e = true)
-                break
-            case STATE_FALSE_L:
-                b === 0x73 /* s */ ? (s = STATE_FALSE_S) : (e = true)
-                break
-            case STATE_FALSE_S:
-                b === 0x65 /* e */ ? ((v = false), (s = states.pop()!)) : (e = true)
-                break
-
-            // Null
-            case STATE_NULL_N:
-                b === 0x75 /* u */ ? (s = STATE_NULL_U) : (e = true)
-                break
-            case STATE_NULL_U:
-                b === 0x6c /* l */ ? (s = STATE_NULL_L) : (e = true)
-                break
-            case STATE_NULL_L:
-                b === 0x6c /* l */ ? ((v = null), (s = states.pop()!)) : (e = true)
-                break
+    const meta: number[] = []
+    const buffer: number[] = []
+
+    const compare = (key: string, start: number) => {
+        for (let i = 0; i < key.length; i++) {
+            if (buffer[start + i + 1] !== key.charCodeAt(i)) {
+                return false
+            }
         }
+
+        return true
     }
 
-    function onStreamResponse(response: { done: boolean; value?: Uint8Array }) {
-        if (response.done || response.value === undefined) {
-            reader.releaseLock()
+    const path: Path = {
+        length() {
+            return meta.length
+        },
 
-            i = 0
-            do {
-                parseByte(0)
-            } while (!e && i === 0)
+        isKey(item, key) {
+            return (
+                item < meta.length &&
+                (item = meta[item]) >= 0 &&
+                buffer[item] === key.length &&
+                compare(key, item)
+            )
+        },
 
-            if (e || !d) {
-                reject(new Error('Reached EOF' + s))
-            } else {
-                resolve(v)
+        isIndex(item, index) {
+            return item < meta.length && meta[item] === -(index + 1)
+        },
+
+        startsWith(item, key) {
+            return (
+                item < meta.length &&
+                (item = meta[item]) >= 0 &&
+                buffer[item] >= key.length &&
+                compare(key, item)
+            )
+        },
+
+        endsWith(item, key) {
+            return (
+                item < meta.length &&
+                (item = meta[item]) >= 0 &&
+                buffer[item] >= key.length &&
+                compare(key, item + buffer[item] - key.length)
+            )
+        },
+    }
+
+    const accept = () => {
+        val = transform(path, val)
+
+        if (meta.length === 0) {
+            if (drop(path, val)) {
+                val = null
             }
 
-            return
-        }
+            state = Ss.END
+        } else if ((cursor = meta[meta.length - 1]) < 0) {
+            if (!drop(path, val)) {
+                parent.push(val)
+            }
 
-        const buffer = response.value
-
-        i = 0
-
-        while (!e && i < buffer.length) {
-            parseByte(buffer[i])
-        }
-
-        if (e) {
-            reader.releaseLock()
-
-            const char = String.fromCharCode(buffer[i])
-            const json = buffer ? new TextDecoder().decode(buffer) : ''
-
-            reject(new Error(`Char ${i} '${char}':\n${json}`))
+            state = Ss.A_NEXT
         } else {
-            reader.read().then(onStreamResponse)
+            if (!drop(path, val)) {
+                parent[decode(buffer.splice(cursor + 1))] = val
+            } else {
+                buffer.splice(cursor + 1)
+            }
+
+            state = Ss.O_NEXT
         }
     }
 
-    reader.read().then(onStreamResponse)
+    const checkIgnore = () => {
+        if (ignore(path)) {
+            shift = I_SHIFT
+            cursor = meta.length
+        } else if (raw(path)) {
+            meta.push(buffer.length)
+            shift = I_SHIFT
+            cursor = meta.length
+            record = 1
+        }
+    }
+
+    const acceptIgnore = () => {
+        if (meta.length === cursor) {
+            shift = N_SHIFT
+
+            if (record) {
+                val = Uint8Array.from(buffer.splice(meta.pop()!))
+                record = 0
+                accept()
+            } else if ((cursor = meta[meta.length - 1]) >= 0) {
+                buffer.splice(cursor + 1)
+            }
+        }
+
+        state = meta[meta.length - 1] < 0 ? Ss.A_NEXT : Ss.O_NEXT
+    }
+
+    const recordByte = (byte: number) => {
+        record && buffer.push(byte)
+    }
+
+    const parseByte = (byte: number) => {
+        const transition = TABLE[state * CLASS_COUNT + CLASSES[byte]]
+        const action = (transition >> shift) & MASK
+
+        state = transition & MASK
+
+        if (action === Aa.RECORD) {
+            recordByte(byte)
+        } else if (action === Aa.ERR) {
+            cursor = i
+            i = END
+            state = Ss.ERR
+        } else if (action === Aa.POP_PAR) {
+            val = parent
+            parent = values.pop()!
+
+            if ((cursor = meta.pop()!) >= 0) {
+                buffer.splice(cursor)
+            }
+
+            accept()
+        } else if (action === Aa.FLAG) {
+            flag = 1
+        } else if (action === Aa.O_INI) {
+            values.push(parent)
+            parent = {}
+            meta.push(buffer.length)
+            buffer.push(0)
+        } else if (action === Aa.O_IGN) {
+            checkIgnore()
+        } else if (action === Aa.A_INI) {
+            values.push(parent)
+            parent = []
+            meta.push(-1)
+            checkIgnore()
+        } else if (action === Aa.A_INCR) {
+            meta[meta.length - 1]--
+            checkIgnore()
+        } else if (action === Aa.S_INI) {
+            cursor = buffer.length
+        } else if (action === Aa.S_ADD) {
+            buffer.push(byte)
+        } else if (action === Aa.S_U_INI) {
+            counter = transition >> P_SHIFT
+            num = byte - ((0x3c0 >> counter) & 0xff)
+        } else if (action === Aa.S_U) {
+            num = (num << 6) + byte - 0x80
+
+            if (counter === 0) {
+                if (num >= 0x10000) {
+                    num -= 0x10000
+                    buffer.push(0xd800 + (num >> 10), 0xdc00 + (num & 0x3ff))
+                } else {
+                    buffer.push(num)
+                }
+
+                num = 0
+                state = Ss.STR
+            } else {
+                counter--
+            }
+        } else if (action === Aa.ESC) {
+            buffer.push(transition >> P_SHIFT)
+        } else if (action === Aa.ESC_U) {
+            num = (num << 4) + byte - (transition >> P_SHIFT)
+
+            if (counter === 3) {
+                buffer.push(num)
+
+                num = counter = 0
+                state = Ss.STR
+            } else {
+                counter++
+            }
+        } else if (action === Aa.S_POP) {
+            if (flag) {
+                cursor = meta[meta.length - 1]
+                buffer[cursor] = buffer.length - cursor - 1
+
+                flag = 0
+                state = Ss.O_SEP
+            } else {
+                val = decode(buffer.splice(cursor))
+                accept()
+            }
+        } else if (action === Aa.N_INI) {
+            cursor = buffer.length
+            buffer.push(byte)
+        } else if (action === Aa.N_POP) {
+            val = parseFloat(decode(buffer.splice(cursor)))
+            i--
+            accept()
+        } else if (action === Aa.POP) {
+            val = (val = transition >> P_SHIFT) === 2 ? null : !!val
+            accept()
+        } else if (action === Aa.I_FLAG) {
+            recordByte(byte)
+            flag = 1
+        } else if (action === Aa.I_INI) {
+            recordByte(byte)
+            meta.push((transition >> P_SHIFT) - 1)
+        } else if (action === Aa.I_U_INI) {
+            recordByte(byte)
+            counter = transition >> P_SHIFT
+        } else if (action === Aa.I_U) {
+            recordByte(byte)
+            if (counter === 0) {
+                state = Ss.STR
+            } else {
+                counter--
+            }
+        } else if (action === Aa.I_POP) {
+            recordByte(byte)
+            if (transition >> P_SHIFT === 3) {
+                meta.pop()!
+            }
+            acceptIgnore()
+        } else if (action === Aa.I_POP_S) {
+            recordByte(byte)
+            if (flag) {
+                flag = 0
+                state = Ss.O_SEP
+            } else {
+                acceptIgnore()
+            }
+        } else if (action === Aa.I_POP_N) {
+            i--
+            acceptIgnore()
+        }
+    }
+
+    const checkState = () => {
+        if (state >= STATE_COUNT) {
+            throw RangeError('Invalid state')
+        }
+    }
+
+    return {
+        write(chunk: ArrayLike<number>): void {
+            checkState()
+
+            for (i = 0; i < chunk.length; i++) {
+                parseByte(chunk[i])
+            }
+
+            if (state === Ss.ERR) {
+                throw SyntaxError(
+                    'Error byte ' +
+                        cursor +
+                        ' (' +
+                        decode([chunk[cursor]]) +
+                        '): "' +
+                        decode(Array.from(chunk)) +
+                        '"'
+                )
+            }
+        },
+
+        end<T = any>(): T {
+            checkState()
+
+            for (i = 0; i < 1; i++) {
+                parseByte(256)
+            }
+
+            if (state !== Ss.DONE) {
+                throw SyntaxError('Reached EOF')
+            }
+
+            return val
+        },
+    }
 }

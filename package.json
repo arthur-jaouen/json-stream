@@ -1,6 +1,6 @@
 {
     "name": "@ja-ja/json-stream",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Lightweight JSON stream parsing library",
     "author": "Arthur Jaouen",
     "license": "MIT",
@@ -11,33 +11,37 @@
         "stream"
     ],
     "type": "module",
-    "types": "./dist/json-stream.d.ts",
+    "sideEffects": false,
+    "main": "./dist/json-stream.min.esm.js",
+    "types": "./dist/index.d.ts",
     "exports": {
-        "script": "./dist/json-stream.min.js",
-        "default": "./dist/json-stream.min.mjs"
+        "types": "./dist/json-stream.d.ts",
+        "import": "./dist/json-stream.min.esm.js",
+        "require": "./dist/json-stream.min.umd.js",
+        "script": "./dist/json-stream.min.browser.js"
     },
     "files": [
         "dist"
     ],
     "scripts": {
-        "build-ts": "tsc",
-        "build-bundle": "webpack --mode production",
-        "build": "rm -rf dist/* && yarn run build-ts && yarn run build-bundle",
-        "dev-ts": "tsc --watch",
-        "dev-bundle": "webpack --watch --mode development",
-        "dev": "concurrently 'yarn:dev-ts' 'yarn:dev-bundle'",
+        "build": "tsc -b src && rollup --config rollup.config.esm.js && rollup --config rollup.config.es5.js",
+        "dev": "tsc -b src && concurrently \"tsc -b src -w\" \"rollup --config rollup.config.esm.js -w\" \"rollup --config rollup.config.es5.js -w\"",
+        "lint": "eslint --ext .ts .",
         "doc": "typedoc src/json-stream.ts",
         "test": "jest",
         "coverage": "jest --coverage",
+        "bench": "yarn run build && cd samples/bench && yarn run start",
+        "sample:node": "yarn run build && cd samples/node && yarn run start",
+        "sample:web": "yarn run build && cd samples/web && yarn run start",
         "prepack": "yarn run test && yarn run build && yarn run doc"
     },
-    "browserslist": [
-        "defaults"
-    ],
     "jest": {
         "testEnvironment": "node",
-        "testRegex": "/src/.*\\.test\\.ts$",
+        "testRegex": "/tests/.*\\.test\\.ts$",
         "coverageDirectory": "./build/coverage",
+        "collectCoverageFrom": [
+            "src/**/*.ts"
+        ],
         "transform": {
             "^.+\\.ts?$": "ts-jest"
         },
@@ -45,7 +49,12 @@
             "ts",
             "js",
             "json"
-        ]
+        ],
+        "globals": {
+            "ts-jest": {
+                "tsconfig": "./tests/tsconfig.json"
+            }
+        }
     },
     "prettier": {
         "trailingComma": "es5",
@@ -55,21 +64,24 @@
         "printWidth": 100
     },
     "devDependencies": {
-        "@babel/core": "^7.15.5",
-        "@babel/preset-env": "^7.15.6",
-        "@tsconfig/node16": "^1.0.1",
-        "@types/jest": "^27.0.2",
-        "babel-loader": "^8.2.2",
-        "browserslist": "^4.17.3",
-        "concurrently": "^6.3.0",
-        "core-js": "^3.18.2",
-        "jest": "^27.2.4",
-        "prettier": "^2.4.1",
-        "ts-jest": "^27.0.5",
+        "@babel/core": "^7.16.0",
+        "@babel/preset-env": "^7.16.4",
+        "@rollup/plugin-babel": "^5.3.0",
+        "@tsconfig/node16": "^1.0.2",
+        "@types/jest": "^27.0.3",
+        "@typescript-eslint/eslint-plugin": "^5.6.0",
+        "@typescript-eslint/parser": "^5.6.0",
+        "concurrently": "^6.4.0",
+        "eslint": "^8.4.1",
+        "jest": "^27.4.4",
+        "prettier": "^2.5.1",
+        "rollup": "^2.61.0",
+        "rollup-plugin-sourcemaps": "^0.6.3",
+        "rollup-plugin-terser": "^7.0.2",
+        "ts-jest": "^27.1.1",
         "tslib": "^2.3.1",
-        "typedoc": "^0.22.5",
-        "typescript": "^4.4.3",
-        "webpack": "^5.57.1",
-        "webpack-cli": "^4.8.0"
-    }
+        "typedoc": "^0.22.10",
+        "typescript": "^4.5.3"
+    },
+    "dependencies": {}
 }

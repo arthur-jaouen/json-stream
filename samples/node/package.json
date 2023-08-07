@@ -1,0 +1,23 @@
+{
+    "name": "@ja-ja/json-stream-sample-node",
+    "version": "0.0.1",
+    "description": "",
+    "author": "Arthur Jaouen",
+    "license": "MIT",
+    "private": true,
+    "type": "module",
+    "main": "src/index.mjs",
+    "scripts": {
+        "start": "node src/index.mjs"
+    },
+    "prettier": {
+        "trailingComma": "es5",
+        "tabWidth": 4,
+        "semi": false,
+        "singleQuote": true,
+        "printWidth": 100
+    },
+    "dependencies": {
+        "@ja-ja/json-stream": "latest"
+    }
+}

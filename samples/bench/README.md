@@ -1,4 +1,4 @@
-# @ja-ja/json-stream-sample-cats
+# @ja-ja/json-stream-sample-bench
 
 ## Run the sample
 

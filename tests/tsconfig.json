@@ -1,0 +1,8 @@
+{
+    "extends": "../tsconfig.base.json",
+    "include": ["./**/*.ts", "@types/jest/jest.d.ts"],
+    "compilerOptions": {
+        "noUnusedLocals": false,
+        "noUnusedParameters": false
+    }
+}
